@@ -12,7 +12,7 @@ if command -v termux-wake-lock >/dev/null 2>&1; then
   termux-wake-lock || true
 fi
 
-python termux_ui_v5.py &
+python termux_ui_v6.py &
 APP_PID=$!
 
 sleep 2
