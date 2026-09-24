@@ -4,6 +4,11 @@ set -e
 cd "$(dirname "$0")"
 . .venv/bin/activate
 
+pkill -f termux_ui_v4.py 2>/dev/null || true
+pkill -f termux_ui_v3.py 2>/dev/null || true
+pkill -f termux_launcher.py 2>/dev/null || true
+pkill -f termux_app.py 2>/dev/null || true
+
 if command -v termux-wake-lock >/dev/null 2>&1; then
   termux-wake-lock || true
 fi
