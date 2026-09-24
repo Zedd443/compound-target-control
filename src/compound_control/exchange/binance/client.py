@@ -5,7 +5,6 @@ import hmac
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
@@ -35,19 +34,10 @@ class BinanceUsdMReadOnlyClient:
         self._timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"X-MBX-APIKEY": credentials.api_key})
-        self._session.verify = self._resolve_ca_bundle()
 
-    @staticmethod
-    def _resolve_ca_bundle() -> str | bool:
-        explicit = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE")
-        if explicit and Path(explicit).is_file():
-            return explicit
-
-        termux_bundle = Path("/data/data/com.termux/files/usr/etc/tls/cert.pem")
-        if termux_bundle.is_file():
-            return str(termux_bundle)
-
-        return True
+        termux_ca = "/data/data/com.termux/files/usr/etc/tls/cert.pem"
+        if os.path.exists(termux_ca):
+            self._session.verify = termux_ca
 
     @classmethod
     def from_sources(cls, secrets: Mapping[str, Any] | None = None):
@@ -59,14 +49,49 @@ class BinanceUsdMReadOnlyClient:
             secrets.get("BINANCE_FUTURES_BASE_URL")
             or os.getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
         ).strip()
-
         if not key or not secret:
-            raise BinanceApiError("Binance credentials not found. Add them to .env or Streamlit Secrets.")
-
+            raise BinanceApiError("Binance credentials not found. Add BINANCE_API_KEY and BINANCE_API_SECRET to .env.")
         return cls(BinanceCredentials(key, secret), base)
 
     def account(self) -> dict[str, Any]:
         return self._signed_get("/fapi/v3/account")
+
+    def positions(self) -> list[dict[str, Any]]:
+        data = self._signed_get("/fapi/v3/positionRisk")
+        return data if isinstance(data, list) else []
+
+    def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        params = {"symbol": symbol} if symbol else None
+        data = self._signed_get("/fapi/v1/openOrders", params)
+        return data if isinstance(data, list) else []
+
+    def klines(self, symbol: str, interval: str = "1h", limit: int = 120) -> list[list[Any]]:
+        data = self._public_get(
+            "/fapi/v1/klines",
+            {"symbol": symbol.upper(), "interval": interval, "limit": limit},
+        )
+        return data if isinstance(data, list) else []
+
+    def ticker_price(self, symbol: str) -> float:
+        data = self._public_get("/fapi/v1/ticker/price", {"symbol": symbol.upper()})
+        if not isinstance(data, dict) or "price" not in data:
+            raise BinanceApiError("Unexpected ticker response from Binance.")
+        return float(data["price"])
+
+    def mark_price(self, symbol: str) -> float:
+        data = self._public_get("/fapi/v1/premiumIndex", {"symbol": symbol.upper()})
+        if not isinstance(data, dict) or "markPrice" not in data:
+            raise BinanceApiError("Unexpected mark-price response from Binance.")
+        return float(data["markPrice"])
+
+    def _public_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        try:
+            response = self._session.get(
+                f"{self._base_url}{path}", params=params or {}, timeout=self._timeout
+            )
+        except requests.RequestException as exc:
+            raise BinanceApiError(f"Binance connection error: {exc}") from exc
+        return self._decode_response(response)
 
     def _signed_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         payload = dict(params or {})
@@ -78,24 +103,22 @@ class BinanceUsdMReadOnlyClient:
             query.encode(),
             hashlib.sha256,
         ).hexdigest()
-
         url = f"{self._base_url}{path}?{query}&signature={signature}"
         try:
             response = self._session.get(url, timeout=self._timeout)
-        except requests.exceptions.SSLError as exc:
-            raise BinanceApiError(f"TLS verification failed: {exc}") from exc
-        except requests.exceptions.RequestException as exc:
-            raise BinanceApiError(f"Network error while contacting Binance: {exc}") from exc
+        except requests.RequestException as exc:
+            raise BinanceApiError(f"Binance connection error: {exc}") from exc
+        return self._decode_response(response)
 
+    @staticmethod
+    def _decode_response(response: requests.Response) -> Any:
         try:
             data = response.json()
         except ValueError as exc:
             raise BinanceApiError(
                 f"Binance returned non-JSON response: HTTP {response.status_code}"
             ) from exc
-
         if not response.ok:
-            message = data.get("msg", "Unknown Binance API error") if isinstance(data, dict) else str(data)
-            raise BinanceApiError(f"Binance API error {response.status_code}: {message}")
-
+            msg = data.get("msg", "Unknown Binance API error") if isinstance(data, dict) else str(data)
+            raise BinanceApiError(f"Binance API error {response.status_code}: {msg}")
         return data
