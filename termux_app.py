@@ -29,10 +29,23 @@ planner = PlanningService(
 
 def account_state() -> dict:
     account = client.account()
+    if not isinstance(account, dict):
+        raise BinanceApiError(f"Unexpected Binance account response type: {type(account).__name__}")
+
+    equity = account.get("totalMarginBalance")
+    if equity is None:
+        equity = account.get("totalWalletBalance")
+    available = account.get("availableBalance")
+    unrealized = account.get("totalUnrealizedProfit", 0)
+
+    if equity is None or available is None:
+        keys = ", ".join(sorted(account.keys())[:20])
+        raise BinanceApiError(f"Unexpected Binance account schema. Keys: {keys}")
+
     return {
-        "equity": float(account["totalMarginBalance"]),
-        "available": float(account["availableBalance"]),
-        "unrealized": float(account["totalUnrealizedProfit"]),
+        "equity": float(equity),
+        "available": float(available),
+        "unrealized": float(unrealized),
     }
 
 
@@ -42,69 +55,80 @@ def api_account():
         return jsonify({"ok": True, **account_state()})
     except BinanceApiError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": f"Backend error: {type(exc).__name__}: {exc}",
+        }), 500
 
 
 @app.post("/api/plan")
 def api_plan():
-    data = request.get_json(force=True)
-    goal = Goal(
-        start_equity=float(data["start_equity"]),
-        target_equity=float(data["target_equity"]),
-        start_date=date.fromisoformat(data["start_date"]),
-        target_date=date.fromisoformat(data["target_date"]),
-        reporting_currency="IDR",
-    )
-    snapshot = build_goal_snapshot(goal, float(data["current_equity"]), date.today())
-    return jsonify({
-        "ok": True,
-        "baseline_equity": snapshot.baseline_equity,
-        "progress_pct": snapshot.progress_pct,
-        "schedule_variance_pct": snapshot.schedule_variance_pct,
-        "days_remaining": snapshot.days_remaining,
-        "original_monthly_return": snapshot.original_monthly_return,
-        "current_monthly_return": snapshot.current_monthly_return,
-        "target_pressure": snapshot.target_pressure,
-        "status": snapshot.status.value,
-    })
+    try:
+        data = request.get_json(force=True)
+        goal = Goal(
+            start_equity=float(data["start_equity"]),
+            target_equity=float(data["target_equity"]),
+            start_date=date.fromisoformat(data["start_date"]),
+            target_date=date.fromisoformat(data["target_date"]),
+            reporting_currency="IDR",
+        )
+        snapshot = build_goal_snapshot(goal, float(data["current_equity"]), date.today())
+        return jsonify({
+            "ok": True,
+            "baseline_equity": snapshot.baseline_equity,
+            "progress_pct": snapshot.progress_pct,
+            "schedule_variance_pct": snapshot.schedule_variance_pct,
+            "days_remaining": snapshot.days_remaining,
+            "original_monthly_return": snapshot.original_monthly_return,
+            "current_monthly_return": snapshot.current_monthly_return,
+            "target_pressure": snapshot.target_pressure,
+            "status": snapshot.status.value,
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Plan error: {type(exc).__name__}: {exc}"}), 400
 
 
 @app.post("/api/size")
 def api_size():
-    data = request.get_json(force=True)
-    goal = Goal(
-        start_equity=float(data["start_equity"]),
-        target_equity=float(data["target_equity"]),
-        start_date=date.fromisoformat(data["start_date"]),
-        target_date=date.fromisoformat(data["target_date"]),
-        reporting_currency="IDR",
-    )
-    setup = TradeSetup(
-        symbol=str(data["symbol"]).upper(),
-        side=str(data["side"]).upper(),
-        entry=float(data["entry"]),
-        stop_loss=float(data["stop_loss"]),
-        leverage=float(data["leverage"]),
-    )
-    result = planner.plan_trade(
-        goal=goal,
-        reporting_equity=float(data["reporting_equity"]),
-        trading_equity=float(data["trading_equity"]),
-        as_of=date.today(),
-        drawdown_pct=float(data.get("drawdown_pct", 0.0)),
-        volatility_regime=VolatilityRegime(str(data.get("volatility_regime", "normal"))),
-        open_risk_pct=float(data.get("open_risk_pct", 0.0)),
-        setup=setup,
-    )
-    return jsonify({
-        "ok": True,
-        "effective_risk_pct": result.risk.effective_risk_pct,
-        "risk_budget": result.position.risk_budget,
-        "recommended_notional": result.position.recommended_notional,
-        "required_margin": result.position.required_margin,
-        "stop_distance_pct": result.position.stop_distance_pct,
-        "estimated_loss_at_stop": result.position.estimated_loss_at_stop,
-        "account_risk_pct": result.position.account_risk_pct,
-    })
+    try:
+        data = request.get_json(force=True)
+        goal = Goal(
+            start_equity=float(data["start_equity"]),
+            target_equity=float(data["target_equity"]),
+            start_date=date.fromisoformat(data["start_date"]),
+            target_date=date.fromisoformat(data["target_date"]),
+            reporting_currency="IDR",
+        )
+        setup = TradeSetup(
+            symbol=str(data["symbol"]).upper(),
+            side=str(data["side"]).upper(),
+            entry=float(data["entry"]),
+            stop_loss=float(data["stop_loss"]),
+            leverage=float(data["leverage"]),
+        )
+        result = planner.plan_trade(
+            goal=goal,
+            reporting_equity=float(data["reporting_equity"]),
+            trading_equity=float(data["trading_equity"]),
+            as_of=date.today(),
+            drawdown_pct=float(data.get("drawdown_pct", 0.0)),
+            volatility_regime=VolatilityRegime(str(data.get("volatility_regime", "normal"))),
+            open_risk_pct=float(data.get("open_risk_pct", 0.0)),
+            setup=setup,
+        )
+        return jsonify({
+            "ok": True,
+            "effective_risk_pct": result.risk.effective_risk_pct,
+            "risk_budget": result.position.risk_budget,
+            "recommended_notional": result.position.recommended_notional,
+            "required_margin": result.position.required_margin,
+            "stop_distance_pct": result.position.stop_distance_pct,
+            "estimated_loss_at_stop": result.position.estimated_loss_at_stop,
+            "account_risk_pct": result.position.account_risk_pct,
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Sizing error: {type(exc).__name__}: {exc}"}), 400
 
 
 @app.get("/")
@@ -122,7 +146,7 @@ HTML = r'''<!doctype html>
 <style>
 :root{color-scheme:dark;--bg:#0b0f14;--card:#121821;--muted:#8993a1;--line:#202938;--accent:#5aa7ff;--ok:#4cc38a;--bad:#ff6b6b}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f4f7fb;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
-.wrap{max-width:760px;margin:auto;padding:18px 14px 40px}.head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0 18px}.title{font-size:28px;font-weight:800;line-height:1.05}.sub{color:var(--muted);font-size:13px;margin-top:6px}.btn{border:0;border-radius:12px;padding:12px 14px;background:#1b2635;color:#fff;font-weight:700}.btn.primary{background:var(--accent);color:#07101d}.btn.danger{background:#3a1d22;color:#ffb3b3}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.metric small{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.metric b{font-size:20px}.section{margin-top:14px}.section h2{font-size:16px;margin:0 0 10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{margin-bottom:10px}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}input,select{width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);background:#0d131b;color:#fff;font-size:16px}.wide{width:100%}.hidden{display:none}.status{font-size:13px;padding:10px 12px;border-radius:12px;background:#111a25;color:var(--muted);margin-bottom:12px}.good{color:var(--ok)}.bad{color:var(--bad)}.tabs{display:flex;gap:8px;margin:14px 0}.tab{flex:1}.tab.active{background:#263950}.mono{font-variant-numeric:tabular-nums}.footer{color:var(--muted);font-size:11px;margin-top:18px;text-align:center}@media(max-width:480px){.title{font-size:24px}.metric b{font-size:17px}}
+.wrap{max-width:760px;margin:auto;padding:18px 14px 40px}.head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0 18px}.title{font-size:28px;font-weight:800;line-height:1.05}.sub{color:var(--muted);font-size:13px;margin-top:6px}.btn{border:0;border-radius:12px;padding:12px 14px;background:#1b2635;color:#fff;font-weight:700}.btn.primary{background:var(--accent);color:#07101d}.btn.danger{background:#3a1d22;color:#ffb3b3}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.metric small{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.metric b{font-size:20px}.section{margin-top:14px}.section h2{font-size:16px;margin:0 0 10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{margin-bottom:10px}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}input,select{width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);background:#0d131b;color:#fff;font-size:16px}.wide{width:100%}.hidden{display:none}.status{font-size:13px;padding:10px 12px;border-radius:12px;background:#111a25;color:var(--muted);margin-bottom:12px;overflow-wrap:anywhere}.good{color:var(--ok)}.bad{color:var(--bad)}.tabs{display:flex;gap:8px;margin:14px 0}.tab{flex:1}.tab.active{background:#263950}.mono{font-variant-numeric:tabular-nums}.footer{color:var(--muted);font-size:11px;margin-top:18px;text-align:center}@media(max-width:480px){.title{font-size:24px}.metric b{font-size:17px}}
 </style>
 </head>
 <body>
@@ -202,12 +226,13 @@ function addMonths(dateStr,months){const d=new Date(dateStr+'T00:00:00');const d
 function planData(){return JSON.parse(localStorage.getItem('ctc_plan')||'null')}
 function savePlan(p){localStorage.setItem('ctc_plan',JSON.stringify(p))}
 function today(){return new Date().toISOString().slice(0,10)}
-async function getAccount(){const r=await fetch('/api/account');const d=await r.json();if(!d.ok)throw new Error(d.error||'Binance error');acct=d;renderAccount();return d}
+async function fetchJson(url,options){const r=await fetch(url,options);const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){const preview=text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,180);throw new Error('Backend returned non-JSON ('+r.status+'). '+(preview||'Check Termux log.'))}if(!d.ok)throw new Error(d.error||('Request failed '+r.status));return d}
+async function getAccount(){const d=await fetchJson('/api/account');acct=d;renderAccount();return d}
 function renderAccount(){const fx=Number($('fx').value||16500);$('eq').textContent=fmtUSDT(acct.equity);$('avail').textContent=fmtUSDT(acct.available);$('idr').textContent=fmtIDR(acct.equity*fx);$('upnl').textContent=fmtUSDT(acct.unrealized)}
 async function refreshAll(){try{$('status').textContent='Refreshing...';await getAccount();$('status').innerHTML='<span class="good">Connected</span> · data Binance terbaru';const p=planData();if(p){$('createPlan').classList.add('hidden');$('planView').classList.remove('hidden');await refreshPlan(p)}else{$('createPlan').classList.remove('hidden');$('planView').classList.add('hidden')}}catch(e){$('status').innerHTML='<span class="bad">'+e.message+'</span>'}}
 async function startPlan(){if(!acct)return;const fx=Number($('fx').value);const p={start_equity:acct.equity*fx,target_equity:Number($('target').value),start_date:today(),target_date:addMonths(today(),$('months').value)};savePlan(p);await refreshAll()}
-async function refreshPlan(p){const fx=Number($('fx').value);const current=acct.equity*fx;const r=await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...p,current_equity:current})});const d=await r.json();$('mTarget').textContent=fmtIDR(p.target_equity);$('mDays').textContent=d.days_remaining;$('mReq').textContent=pct(d.current_monthly_return);$('mPressure').textContent=Number(d.target_pressure).toFixed(2)+'×';$('mToday').textContent=fmtIDR(d.baseline_equity);$('mStatus').textContent=d.status.replaceAll('_',' ');$('pStart').textContent=fmtIDR(p.start_equity);$('pStartDate').textContent=p.start_date;$('pTargetDate').textContent=p.target_date}
-async function sizeTrade(){const p=planData();if(!p||!acct)return;const fx=Number($('fx').value);const body={...p,reporting_equity:acct.equity*fx,trading_equity:acct.equity,symbol:$('symbol').value,side:$('side').value,entry:Number($('entry').value),stop_loss:Number($('sl').value),leverage:Number($('lev').value),drawdown_pct:Number($('dd').value)/100,open_risk_pct:Number($('openRisk').value)/100,volatility_regime:$('vol').value};const r=await fetch('/api/size',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!d.ok){alert(d.error||'Calculation error');return}$('sizeResult').classList.remove('hidden');$('rEff').textContent=pct(d.effective_risk_pct);$('riskBudget').textContent=fmtUSDT(d.risk_budget);$('notional').textContent=fmtUSDT(d.recommended_notional);$('margin').textContent=fmtUSDT(d.required_margin);$('stopDist').textContent=pct(d.stop_distance_pct);$('lossSL').textContent=fmtUSDT(d.estimated_loss_at_stop)}
+async function refreshPlan(p){try{const fx=Number($('fx').value);const current=acct.equity*fx;const d=await fetchJson('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...p,current_equity:current})});$('mTarget').textContent=fmtIDR(p.target_equity);$('mDays').textContent=d.days_remaining;$('mReq').textContent=pct(d.current_monthly_return);$('mPressure').textContent=Number(d.target_pressure).toFixed(2)+'×';$('mToday').textContent=fmtIDR(d.baseline_equity);$('mStatus').textContent=d.status.replaceAll('_',' ');$('pStart').textContent=fmtIDR(p.start_equity);$('pStartDate').textContent=p.start_date;$('pTargetDate').textContent=p.target_date}catch(e){$('status').innerHTML='<span class="bad">'+e.message+'</span>'}}
+async function sizeTrade(){const p=planData();if(!p||!acct)return;try{const fx=Number($('fx').value);const body={...p,reporting_equity:acct.equity*fx,trading_equity:acct.equity,symbol:$('symbol').value,side:$('side').value,entry:Number($('entry').value),stop_loss:Number($('sl').value),leverage:Number($('lev').value),drawdown_pct:Number($('dd').value)/100,open_risk_pct:Number($('openRisk').value)/100,volatility_regime:$('vol').value};const d=await fetchJson('/api/size',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});$('sizeResult').classList.remove('hidden');$('rEff').textContent=pct(d.effective_risk_pct);$('riskBudget').textContent=fmtUSDT(d.risk_budget);$('notional').textContent=fmtUSDT(d.recommended_notional);$('margin').textContent=fmtUSDT(d.required_margin);$('stopDist').textContent=pct(d.stop_distance_pct);$('lossSL').textContent=fmtUSDT(d.estimated_loss_at_stop)}catch(e){$('status').innerHTML='<span class="bad">'+e.message+'</span>'}}
 function resetPlan(){localStorage.removeItem('ctc_plan');refreshAll()}
 function showTab(id,btn){document.querySelectorAll('.tabpane').forEach(x=>x.classList.add('hidden'));document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));$(id).classList.remove('hidden');btn.classList.add('active')}
 $('fx').addEventListener('change',()=>{if(acct){renderAccount();const p=planData();if(p)refreshPlan(p)}});refreshAll();
