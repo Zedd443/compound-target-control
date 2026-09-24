@@ -31,6 +31,7 @@ class BinanceUsdMReadOnlyClient:
     ) -> None:
         self._credentials = credentials
         self._base_url = base_url.rstrip("/")
+        self._spot_base_url = os.getenv("BINANCE_SPOT_BASE_URL", "https://api.binance.com").rstrip("/")
         self._timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"X-MBX-APIKEY": credentials.api_key})
@@ -84,16 +85,53 @@ class BinanceUsdMReadOnlyClient:
             raise BinanceApiError("Unexpected mark-price response from Binance.")
         return float(data["markPrice"])
 
+    # Spot/Funding are intentionally exposed only to the backend so the UI can
+    # reconcile Binance Overview without cluttering the dashboard with wallet details.
+    def spot_account(self) -> dict[str, Any]:
+        data = self._signed_request("GET", self._spot_base_url, "/api/v3/account")
+        return data if isinstance(data, dict) else {}
+
+    def funding_assets(self) -> list[dict[str, Any]]:
+        data = self._signed_request("POST", self._spot_base_url, "/sapi/v1/asset/get-funding-asset")
+        return data if isinstance(data, list) else []
+
+    def spot_ticker_price(self, symbol: str) -> float:
+        data = self._public_request(
+            self._spot_base_url,
+            "/api/v3/ticker/price",
+            {"symbol": symbol.upper()},
+        )
+        if not isinstance(data, dict) or "price" not in data:
+            raise BinanceApiError(f"No Spot ticker for {symbol}.")
+        return float(data["price"])
+
     def _public_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._public_request(self._base_url, path, params)
+
+    def _public_request(
+        self,
+        base_url: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         try:
             response = self._session.get(
-                f"{self._base_url}{path}", params=params or {}, timeout=self._timeout
+                f"{base_url}{path}", params=params or {}, timeout=self._timeout
             )
         except requests.RequestException as exc:
             raise BinanceApiError(f"Binance connection error: {exc}") from exc
         return self._decode_response(response)
 
     def _signed_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._signed_request("GET", self._base_url, path, params)
+
+    def _signed_request(
+        self,
+        method: str,
+        base_url: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         payload = dict(params or {})
         payload["timestamp"] = int(time.time() * 1000)
         payload["recvWindow"] = 5000
@@ -103,9 +141,18 @@ class BinanceUsdMReadOnlyClient:
             query.encode(),
             hashlib.sha256,
         ).hexdigest()
-        url = f"{self._base_url}{path}?{query}&signature={signature}"
+        signed = f"{query}&signature={signature}"
+        url = f"{base_url}{path}"
         try:
-            response = self._session.get(url, timeout=self._timeout)
+            if method.upper() == "POST":
+                response = self._session.post(
+                    url,
+                    data=signed,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=self._timeout,
+                )
+            else:
+                response = self._session.get(f"{url}?{signed}", timeout=self._timeout)
         except requests.RequestException as exc:
             raise BinanceApiError(f"Binance connection error: {exc}") from exc
         return self._decode_response(response)
