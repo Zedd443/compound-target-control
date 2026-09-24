@@ -4,16 +4,15 @@ set -e
 cd "$(dirname "$0")"
 . .venv/bin/activate
 
-pkill -f termux_ui_v4.py 2>/dev/null || true
-pkill -f termux_ui_v3.py 2>/dev/null || true
-pkill -f termux_launcher.py 2>/dev/null || true
-pkill -f termux_app.py 2>/dev/null || true
+# Stop any older local UI process so port 8501 never serves a stale version.
+pkill -f 'python .*termux_.*\.py' 2>/dev/null || true
+sleep 1
 
 if command -v termux-wake-lock >/dev/null 2>&1; then
   termux-wake-lock || true
 fi
 
-python termux_ui_v4.py &
+python termux_ui_v5.py &
 APP_PID=$!
 
 sleep 2
