@@ -8,7 +8,7 @@ if command -v termux-wake-lock >/dev/null 2>&1; then
   termux-wake-lock || true
 fi
 
-python termux_app.py &
+python termux_launcher.py &
 APP_PID=$!
 
 sleep 2
