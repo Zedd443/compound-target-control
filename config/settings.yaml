@@ -7,6 +7,12 @@ risk:
   base_risk_pct: 0.004
   absolute_min_risk_pct: 0.0015
   absolute_max_risk_pct: 0.006
+  small_account:
+    max_trading_equity: 500
+    base_risk_pct: 0.024
+    absolute_min_risk_pct: 0.0075
+    absolute_max_risk_pct: 0.03
+    max_open_risk_pct: 0.09
   target_multiplier:
     far_ahead: 0.60
     ahead: 0.80
