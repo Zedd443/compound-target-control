@@ -54,6 +54,7 @@ class RiskContext:
     target_status: TargetStatus
     volatility_regime: VolatilityRegime
     open_risk_pct: float = 0.0
+    trading_equity: float | None = None
 
 
 @dataclass(frozen=True)
