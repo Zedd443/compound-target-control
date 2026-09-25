@@ -17,6 +17,6 @@ class PlanningService:
         self._risk_controller=risk_controller; self._execution_config=execution_config
     def plan_trade(self,*,goal:Goal,reporting_equity:float,trading_equity:float,as_of:date,drawdown_pct:float,volatility_regime:VolatilityRegime,open_risk_pct:float,setup:TradeSetup)->PlanningResult:
         snap=build_goal_snapshot(goal,reporting_equity,as_of)
-        decision=self._risk_controller.decide(RiskContext(reporting_equity,drawdown_pct,snap.status,volatility_regime,open_risk_pct))
+        decision=self._risk_controller.decide(RiskContext(reporting_equity,drawdown_pct,snap.status,volatility_regime,open_risk_pct,trading_equity))
         position=calculate_position_size(trading_equity=trading_equity,effective_risk_pct=decision.effective_risk_pct,setup=setup,execution_config=self._execution_config)
         return PlanningResult(snap,decision,position)
