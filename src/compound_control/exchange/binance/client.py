@@ -66,6 +66,41 @@ class BinanceUsdMReadOnlyClient:
         data = self._signed_get("/fapi/v1/openOrders", params)
         return data if isinstance(data, list) else []
 
+    def user_trades(
+        self,
+        symbol: str,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"symbol": symbol.upper(), "limit": max(1, min(int(limit), 1000))}
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        if end_time is not None:
+            params["endTime"] = int(end_time)
+        data = self._signed_get("/fapi/v1/userTrades", params)
+        return data if isinstance(data, list) else []
+
+    def income_history(
+        self,
+        symbol: str | None = None,
+        income_type: str | None = None,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        if income_type:
+            params["incomeType"] = income_type
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        if end_time is not None:
+            params["endTime"] = int(end_time)
+        data = self._signed_get("/fapi/v1/income", params)
+        return data if isinstance(data, list) else []
+
     def klines(self, symbol: str, interval: str = "1h", limit: int = 120) -> list[list[Any]]:
         data = self._public_get(
             "/fapi/v1/klines",
