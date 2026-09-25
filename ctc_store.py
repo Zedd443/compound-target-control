@@ -20,6 +20,12 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def _ensure_column(con: sqlite3.Connection, table: str, name: str, ddl: str) -> None:
+    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if name not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 def init_db() -> None:
     with connect() as con:
         con.executescript(
@@ -86,6 +92,25 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_trade_targets_trade ON trade_targets(trade_id, target_no);
             """
         )
+        for name, ddl in [
+            ("reconcile_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("matched_at", "TEXT"),
+            ("closed_at", "TEXT"),
+            ("actual_entry", "REAL"),
+            ("actual_exit", "REAL"),
+            ("actual_qty", "REAL"),
+            ("gross_realized_pnl", "REAL"),
+            ("commission", "REAL"),
+            ("funding", "REAL"),
+            ("net_pnl", "REAL"),
+            ("realized_r", "REAL"),
+            ("highest_tp_hit", "INTEGER"),
+            ("duration_seconds", "INTEGER"),
+            ("match_note", "TEXT"),
+            ("binance_first_trade_id", "TEXT"),
+            ("binance_last_trade_id", "TEXT"),
+        ]:
+            _ensure_column(con, "trades", name, ddl)
     migrate_legacy_history_once()
 
 
@@ -181,8 +206,9 @@ def insert_trade(payload: dict[str, Any]) -> int:
              stop_loss, leverage, leverage_source, futures_equity, overview_equity,
              effective_risk_pct, max_planned_loss, recommended_notional, required_margin,
              stop_distance_pct, target_pressure, drawdown_pct, open_risk_pct,
-             volatility_regime, atr_pct, partial_profile, runner_fraction, weighted_r, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+             volatility_regime, atr_pct, partial_profile, runner_fraction, weighted_r, status,
+             reconcile_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'pending')
             """,
             (
                 payload["created_at"], payload.get("plan_id", ""), payload["lead"],
@@ -208,6 +234,48 @@ def insert_trade(payload: dict[str, Any]) -> int:
                 (trade_id, i, float(target["price"]), float(target.get("fraction", 0)), float(target.get("r_multiple", 0))),
             )
         return trade_id
+
+
+def get_trade(trade_id: int) -> dict[str, Any] | None:
+    with connect() as con:
+        row = con.execute("SELECT * FROM trades WHERE id=?", (int(trade_id),)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        targets = con.execute(
+            "SELECT target_no, price, allocation, r_multiple FROM trade_targets WHERE trade_id=? ORDER BY target_no",
+            (int(trade_id),),
+        ).fetchall()
+        item["targets"] = [dict(t) for t in targets]
+        return item
+
+
+def list_reconcilable_trades(limit: int = 100) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 500))
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT id FROM trades
+            WHERE status != 'closed' OR reconcile_status IN ('pending','matched','needs_review')
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [t for r in rows if (t := get_trade(int(r["id"]))) is not None]
+
+
+def update_trade_reconciliation(trade_id: int, values: dict[str, Any]) -> None:
+    allowed = {
+        "status", "reconcile_status", "matched_at", "closed_at", "actual_entry", "actual_exit",
+        "actual_qty", "gross_realized_pnl", "commission", "funding", "net_pnl", "realized_r",
+        "highest_tp_hit", "duration_seconds", "match_note", "binance_first_trade_id", "binance_last_trade_id",
+    }
+    fields = [(k, v) for k, v in values.items() if k in allowed]
+    if not fields:
+        return
+    sql = "UPDATE trades SET " + ", ".join(f"{k}=?" for k, _ in fields) + " WHERE id=?"
+    with connect() as con:
+        con.execute(sql, [v for _, v in fields] + [int(trade_id)])
 
 
 def list_trades(limit: int = 100) -> list[dict[str, Any]]:
