@@ -4,6 +4,15 @@ import termux_ui_v9 as base
 
 appmod = base.appmod
 
+# Use the user's trading terminology in the UI. Internally the backend keeps
+# recommended_notional as the position value before leverage, but the screen
+# calls that value VOLUME and keeps required_margin as MARGIN.
+appmod.HTML = appmod.HTML.replace("Recommended Notional", "VOLUME")
+appmod.HTML = appmod.HTML.replace("Recommended notional", "VOLUME")
+appmod.HTML = appmod.HTML.replace("Notional", "VOLUME")
+appmod.HTML = appmod.HTML.replace("Required Margin", "MARGIN")
+appmod.HTML = appmod.HTML.replace("Required margin", "MARGIN")
+
 # Default leverage is adaptive only when the signal does not explicitly specify leverage.
 # Futures equity < $500 -> 30x default. Otherwise keep 10x default.
 extra_script = r'''
